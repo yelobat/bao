@@ -1,3 +1,7 @@
+/*
+ * @description A standard library for C.
+ */
+
 #ifndef BAOLIB_H_
 #define BAOLIB_H_
 
