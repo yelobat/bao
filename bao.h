@@ -9,6 +9,7 @@
 #include <errno.h>
 #include <stdlib.h>
 #include <string.h>
+#include <limits.h>
 
 #ifndef BAOLIBDEF
 #ifdef BAOLIBSTATIC
@@ -43,6 +44,20 @@ struct bao_list_t {
 
 typedef struct bao_list_t *bao_list_t;
 
+struct bao_map_t {
+	size_t size;
+	size_t length;
+	int (*compare)(const void *, const void *);
+	size_t (*hash)(const void *);
+	struct bao_mapping_t {
+		struct bao_mapping_t *next;
+		void *key;
+		void *value;
+	} **buckets;
+};
+
+typedef struct bao_map_t *bao_map_t;
+
 BAOLIBDEF bao_array_t bao_array_create(size_t size, size_t memb_size);
 BAOLIBDEF int         bao_array_insert(bao_array_t array, void *v);
 BAOLIBDEF void *      bao_array_get(bao_array_t array, size_t i);
@@ -56,6 +71,15 @@ BAOLIBDEF bao_list_t  bao_list_pop(bao_list_t list, void **v);
 BAOLIBDEF void *      bao_list_get(bao_list_t list, size_t i);
 BAOLIBDEF bao_list_t  bao_list_append(bao_list_t a_list, bao_list_t b_list);
 BAOLIBDEF void        bao_list_free(bao_list_t *list);
+
+BAOLIBDEF bao_map_t bao_map_create(size_t hint,
+				   int (*compare)(const void *, const void *),
+				   size_t hash(const void *));
+BAOLIBDEF int       bao_map_insert(bao_map_t map, void *key, void *v,
+				   void **prev);
+BAOLIBDEF void *    bao_map_find(bao_map_t map, void *key);
+BAOLIBDEF size_t    bao_map_length(bao_map_t map);
+BAOLIBDEF void      bao_map_free(bao_map_t *map);
 
 #ifdef BAO_IMPLEMENTATION
 
@@ -233,6 +257,104 @@ BAOLIBDEF void bao_list_free(bao_list_t *list)
 		BAO_FREE((*list)->data);
 		BAO_FREE(*list);
 	}
+}
+
+BAOLIBDEF bao_map_t bao_map_create(size_t hint,
+				   int (*compare)(const void *, const void *),
+				   size_t hash(const void *))
+{
+	bao_map_t map;
+	size_t i;
+	static int primes[] = {
+		509, 509, 1021, 2053, 4093,
+		8191, 16381, 32771, 65521, INT_MAX 
+	};
+
+	assert(compare);
+	assert(hash);
+
+	for (i = 1; primes[i] < hint; i++)
+		;
+	map = BAO_MALLOC(sizeof(*map) + primes[i-1] * sizeof(map->buckets[0]));
+	if (!map) {
+		return NULL;
+	}
+	
+	map->size = primes[i-1];
+	map->length = 0;
+	map->compare = compare;
+	map->hash = hash;
+	map->buckets = (struct bao_mapping_t **) (map + 1);
+	for (i = 0; i < map->size; i++)
+		map->buckets[i] = NULL;
+	return map;
+}
+
+#include <stdio.h>
+BAOLIBDEF int bao_map_insert(bao_map_t map, void *key, void *v, void **prev)
+{
+	size_t i;
+	struct bao_mapping_t *p;
+
+	assert(map);
+	assert(key);
+	assert(v);
+	
+	i = map->hash(key) % map->size;
+	for (p = map->buckets[i]; p; p = p->next)
+		if (map->compare(key, p->key) == 0) 
+			break;
+
+	if (p == NULL) {
+		p = BAO_MALLOC(sizeof(*p));
+		if (!p) {
+			return -ENOMEM;
+		}
+		p->key = key;
+		p->next = map->buckets[i];
+		map->buckets[i] = p;
+		map->length++;
+		if (prev) *prev = NULL;
+	} else if (prev) {
+		*prev = p->value;
+	}
+
+	p->value = v;
+	return 0;
+}
+
+BAOLIBDEF void *bao_map_find(bao_map_t map, void *key)
+{
+	size_t i;
+	struct bao_mapping_t *p;
+	assert(map);
+	assert(key);
+	i = map->hash(key) % map->size;
+	for (p = map->buckets[i]; p; p = p->next)
+		if (map->compare(key, p->key) == 0)
+			break;
+	return p ? p->value : NULL;
+}
+
+BAOLIBDEF size_t bao_map_length(bao_map_t map)
+{
+	assert(map);
+	return map->length;
+}
+
+BAOLIBDEF void bao_map_free(bao_map_t *map)
+{
+	size_t i, j;
+	struct bao_mapping_t *p, *q;
+	for (i = 0; i < (*map)->size; i++) {
+		for (p = (*map)->buckets[i]; p; p = q) {
+			q = p->next;
+			BAO_FREE(p->key);
+			BAO_FREE(p->value);
+			BAO_FREE(p);
+		}
+	}
+	BAO_FREE(*map);
 }
 
 #endif /* BAO_IMPLEMENTATION */
