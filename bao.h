@@ -28,6 +28,9 @@
 #define BAO_FREE(x) ((void) (free(x), x = NULL))
 #endif
 
+#define BAO_MAX(a, b) (((a) > (b)) ? (a) : (b))
+#define BAO_MIN(a, b) (((a) > (b)) ? (b) : (a))
+
 struct bao_array_t {
 	size_t size;
 	size_t memb_size;
@@ -58,6 +61,19 @@ struct bao_map_t {
 
 typedef struct bao_map_t *bao_map_t;
 
+struct bao_set_t {
+	size_t size;
+	size_t length;
+	int (*compare)(const void *, const void *);
+	size_t (*hash)(const void *);
+	struct bao_member_t {
+		struct bao_member_t *next;
+		void *member;
+	} **buckets;
+};
+
+typedef struct bao_set_t *bao_set_t;
+
 BAOLIBDEF bao_array_t bao_array_create(size_t size, size_t memb_size);
 BAOLIBDEF int         bao_array_insert(bao_array_t array, void *v);
 BAOLIBDEF void *      bao_array_get(bao_array_t array, size_t i);
@@ -80,6 +96,15 @@ BAOLIBDEF int       bao_map_insert(bao_map_t map, void *key, void *v,
 BAOLIBDEF void *    bao_map_find(bao_map_t map, void *key);
 BAOLIBDEF size_t    bao_map_length(bao_map_t map);
 BAOLIBDEF void      bao_map_free(bao_map_t *map);
+
+BAOLIBDEF bao_set_t bao_set_create(size_t hint,
+				   int (*compare)(const void *, const void *),
+				   size_t (*hash)(const void *));
+BAOLIBDEF int       bao_set_insert(bao_set_t set, void *member, void **prev);
+BAOLIBDEF int       bao_set_inside(bao_set_t set, void *member);
+BAOLIBDEF bao_set_t bao_set_copy(bao_set_t set, size_t size);
+BAOLIBDEF bao_set_t bao_set_union(bao_set_t set_a, bao_set_t set_b);
+BAOLIBDEF void      bao_set_free(bao_set_t *set);
 
 #ifdef BAO_IMPLEMENTATION
 
@@ -254,7 +279,6 @@ BAOLIBDEF void bao_list_free(bao_list_t *list)
 	assert(list);
 	for (; *list; *list = next) {
 		next = (*list)->rest;
-		BAO_FREE((*list)->data);
 		BAO_FREE(*list);
 	}
 }
@@ -345,16 +369,168 @@ BAOLIBDEF size_t bao_map_length(bao_map_t map)
 BAOLIBDEF void bao_map_free(bao_map_t *map)
 {
 	size_t i, j;
+	
+	assert(map);
+	assert(*map);
+	
 	struct bao_mapping_t *p, *q;
 	for (i = 0; i < (*map)->size; i++) {
 		for (p = (*map)->buckets[i]; p; p = q) {
 			q = p->next;
-			BAO_FREE(p->key);
-			BAO_FREE(p->value);
 			BAO_FREE(p);
 		}
 	}
 	BAO_FREE(*map);
+}
+
+BAOLIBDEF bao_set_t bao_set_create(size_t hint,
+				   int (*compare)(const void *, const void *),
+				   size_t (*hash)(const void *))
+{
+	size_t i;
+	bao_set_t set;
+	static int primes[] = {
+		509, 509, 1021, 2053, 4093,
+		8191, 16381, 32771, 65521, INT_MAX 
+	};
+
+	for (i = 1; primes[i] < hint; i++)
+		;
+	set = BAO_MALLOC(sizeof(*set) + primes[i-1] * sizeof(set->buckets[0]));
+	if (!set) {
+		return NULL;
+	}
+
+	set->size = primes[i-1];
+	set->compare = compare;
+	set->hash = hash;
+	set->buckets = (struct bao_member_t **) (set + 1);
+	for (i = 0; i < set->size; i++)
+		set->buckets[i] = NULL;
+	set->length = 0;
+	return set;
+}
+
+BAOLIBDEF int bao_set_insert(bao_set_t set, void *member, void **prev)
+{
+	size_t i;
+	struct bao_member_t *p;
+
+	assert(set);
+	assert(member);
+
+	i = set->hash(member) % set->size;
+	for (p = set->buckets[i]; p; p = p->next)
+		if (set->compare(member, p->member) == 0)
+			break;
+	if (p == NULL) {
+		p = BAO_MALLOC(sizeof(*p));
+		if (!p) {
+			return -ENOMEM;
+		}
+		p->member = member;
+		p->next = set->buckets[i];
+		set->buckets[i] = p;
+		set->length++;
+		if (prev) *prev = NULL;
+	} else {
+		if (prev) *prev = p->member;
+		p->member = member;
+	}
+
+	return 0;
+}
+
+BAOLIBDEF int bao_set_inside(bao_set_t set, void *member)
+{
+	size_t i;
+	struct bao_member_t *p;
+
+	assert(set);
+	assert(member);
+
+	i = set->hash(member) % set->size;
+	for (p = set->buckets[i]; p; p = p->next)
+		if (set->compare(member, p->member) == 0)
+			break;
+	return p != NULL;
+}
+
+BAOLIBDEF bao_set_t bao_set_copy(bao_set_t set, size_t size)
+{
+	size_t i, j;
+	void *member;
+	bao_set_t new_set;
+	struct bao_member_t *p, *q;
+
+	assert(set);
+	new_set = bao_set_create(size, set->compare, set->hash);
+	if (!new_set) {
+		return NULL;
+	}
+
+	for (i = 0; i < set->size; i++) {
+		for (p = set->buckets[i]; p; p = p->next) {
+			member = p->member;
+			j = set->hash(member) % new_set->size;
+			q = BAO_MALLOC(sizeof(*q));
+			if (!q) {
+				bao_set_free(&new_set);
+				return NULL;
+			}
+			q->member = member;
+			q->next = new_set->buckets[j];
+			new_set->buckets[j] = q;
+			new_set->length++;
+		}
+	}
+
+	return new_set;
+}
+
+BAOLIBDEF bao_set_t bao_set_union(bao_set_t set_a, bao_set_t set_b)
+{
+	size_t i, j;
+	bao_set_t new_set;
+	struct bao_member_t *p;
+	if (set_a == NULL) {
+		assert(set_b);
+		return bao_set_copy(set_b, set_b->size);
+	} else if (set_b == NULL) {
+		assert(set_a);
+		return bao_set_copy(set_a, set_a->size);
+	}
+	
+	assert(set_a->compare == set_b->compare && set_a->hash == set_b->hash);
+	new_set = bao_set_copy(set_a, BAO_MAX(set_a->size, set_b->size));
+	for (i = 0; i < set_b->size; i++) {
+		for (p = set_b->buckets[i]; p; p = p->next) {
+			if (bao_set_insert(new_set, p->member, NULL) != 0) {
+				bao_set_free(&new_set);
+				return NULL;
+			}
+		}
+	}
+
+	return new_set;
+}
+
+BAOLIBDEF void bao_set_free(bao_set_t *set)
+{
+	size_t i;
+	struct bao_member_t *p, *q;
+
+	assert(set);
+	assert(*set);
+
+	for (i = 0; i < (*set)->size; i++) {
+		for (p = (*set)->buckets[i]; p; p = q) {
+			q = p->next;
+			BAO_FREE(p);
+		}
+	}
+
+	BAO_FREE(*set);
 }
 
 #endif /* BAO_IMPLEMENTATION */
