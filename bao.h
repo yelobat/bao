@@ -31,6 +31,33 @@
 #define BAO_MAX(a, b) (((a) > (b)) ? (a) : (b))
 #define BAO_MIN(a, b) (((a) > (b)) ? (b) : (a))
 
+struct bao_arena_t {
+	struct bao_arena_t *prev;
+	char *avail;
+	char *limit;
+};
+
+typedef struct bao_arena_t *bao_arena_t;
+
+static bao_arena_t bao_arena_freechunks;
+static int bao_arena_nfree;
+
+union bao_align_t {
+	int i;
+	long l;
+	long *lp;
+	void *p;
+	void (*fp)(void);
+	float f;
+	double d;
+	long double ld;
+};
+
+union bao_header_t {
+	struct bao_arena_t b;
+	union bao_align_t a;
+};
+
 struct bao_array_t {
 	size_t size;
 	size_t memb_size;
@@ -73,6 +100,12 @@ struct bao_set_t {
 };
 
 typedef struct bao_set_t *bao_set_t;
+
+BAOLIBDEF bao_arena_t bao_arena_create(void);
+BAOLIBDEF void *      bao_arena_alloc(bao_arena_t arena, size_t size);
+BAOLIBDEF void *      bao_arean_calloc(bao_arena_t arena, size_t nmemb, size_t size);
+BAOLIBDEF void        bao_arena_free(bao_arena_t arena);
+BAOLIBDEF void        bao_arena_release(bao_arena_t *arena);
 
 BAOLIBDEF bao_array_t bao_array_create(size_t size, size_t memb_size);
 BAOLIBDEF int         bao_array_insert(bao_array_t array, void *v);
@@ -119,6 +152,96 @@ static size_t bao_npo2(size_t n)
 	n |= n >> 16;
 	n++;
 	return n;
+}
+
+BAOLIBDEF bao_arena_t bao_arena_create(void)
+{
+	bao_arena_t arena = BAO_MALLOC(sizeof(*arena));
+	if (!arena) {
+		return NULL;
+	}
+	arena->prev = NULL;
+	arena->limit = arena->avail = NULL;
+	return arena;
+}
+
+BAOLIBDEF void *bao_arena_alloc(bao_arena_t arena, size_t size)
+{
+	assert(arena);
+	assert(size > 0);
+	size = ((size + sizeof(union bao_align_t) - 1) /
+		(sizeof(union bao_align_t))) * (sizeof(union bao_align_t));
+	while (size > arena->limit - arena->avail) {
+		char *limit;
+		bao_arena_t new_arena;
+		if ((new_arena = bao_arena_freechunks) != NULL) {
+			bao_arena_freechunks = bao_arena_freechunks->prev;
+			bao_arena_nfree--;
+			limit = new_arena->limit;
+		} else {
+			size_t m = sizeof(union bao_header_t) + size + 10*1024;
+			new_arena = BAO_MALLOC(m);
+			if (new_arena == NULL) {
+				return NULL;
+			}
+			limit = (char *) new_arena + m;
+		}
+		*new_arena = *arena;
+		arena->avail = (char *)((union bao_header_t *) new_arena + 1);
+		arena->limit = limit;
+		arena->prev  = new_arena;
+	}
+	arena->avail += size;
+	return arena->avail - size;
+}
+
+BAOLIBDEF void *bao_arean_calloc(bao_arena_t arena, size_t nmemb, size_t size)
+{
+	void *ptr;
+
+	assert(size > 0);
+	assert(nmemb > 0);
+
+	ptr = bao_arena_alloc(arena, nmemb * size);
+	if (!ptr) {
+		return NULL;
+	}
+
+	memset(ptr, '\0', nmemb * size);
+	return ptr;
+}
+
+#define BAO_ARENA_THRESHOLD (10)
+
+BAOLIBDEF void bao_arena_free(bao_arena_t arena)
+{
+	assert(arena);
+	while (arena->prev) {
+		struct bao_arena_t tmp = *arena->prev;
+		if (bao_arena_nfree < BAO_ARENA_THRESHOLD) {
+			arena->prev->prev = bao_arena_freechunks;
+			bao_arena_freechunks = arena->prev;
+			bao_arena_nfree++;
+			bao_arena_freechunks->limit = arena->limit;
+		} else {
+			BAO_FREE(arena->prev);
+		}
+		*arena = tmp;
+	}
+
+	assert(arena->limit == NULL);
+	assert(arena->avail == NULL);
+}
+
+BAOLIBDEF void bao_arena_release(bao_arena_t *arena)
+{
+	assert(arena && *arena);
+	while ((*arena)->prev) {
+		struct bao_arena_t tmp = *(*arena)->prev;
+		BAO_FREE((*arena)->prev);
+		*(*arena) = tmp;
+	}
+	BAO_FREE(*arena);
 }
 
 BAOLIBDEF bao_array_t bao_array_create(size_t size, size_t memb_size)
@@ -368,7 +491,7 @@ BAOLIBDEF size_t bao_map_length(bao_map_t map)
 
 BAOLIBDEF void bao_map_free(bao_map_t *map)
 {
-	size_t i, j;
+	size_t i;
 	
 	assert(map);
 	assert(*map);
@@ -490,7 +613,7 @@ BAOLIBDEF bao_set_t bao_set_copy(bao_set_t set, size_t size)
 
 BAOLIBDEF bao_set_t bao_set_union(bao_set_t set_a, bao_set_t set_b)
 {
-	size_t i, j;
+	size_t i;
 	bao_set_t new_set;
 	struct bao_member_t *p;
 	if (set_a == NULL) {
