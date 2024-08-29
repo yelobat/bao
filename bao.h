@@ -11,6 +11,8 @@
 #include <string.h>
 #include <limits.h>
 
+#include "linear.h"
+
 #ifndef BAOLIBDEF
 #ifdef BAOLIBSTATIC
 #define BAOLIBDEF static
@@ -31,16 +33,21 @@
 #define BAO_MAX(a, b) (((a) > (b)) ? (a) : (b))
 #define BAO_MIN(a, b) (((a) > (b)) ? (b) : (a))
 
-struct bao_arena_t {
-	struct bao_arena_t *prev;
+struct bao_arena_chunk_t {
+	struct bao_arena_chunk_t *prev;
 	char *avail;
 	char *limit;
 };
 
-typedef struct bao_arena_t *bao_arena_t;
+typedef struct bao_arena_chunk_t *bao_arena_chunk_t;
 
-static bao_arena_t bao_arena_freechunks;
-static int bao_arena_nfree;
+struct bao_arena_t {
+	bao_arena_chunk_t bao_arena_freechunks;
+	size_t bao_arena_nfree;
+	bao_arena_chunk_t first;
+};
+
+typedef struct bao_arena_t *bao_arena_t;
 
 union bao_align_t {
 	int i;
@@ -101,6 +108,17 @@ struct bao_set_t {
 
 typedef struct bao_set_t *bao_set_t;
 
+#define BAO_OCTREE_LAYER_CAPACITY (1024)
+
+struct bao_octree_t {
+	aabb_t aabb;
+	size_t size;
+	void *objects[BAO_OCTREE_LAYER_CAPACITY];
+	struct bao_octree_t *children[BAO_OCTREE_LAYER_CAPACITY];
+};
+
+typedef struct bao_octree_t *bao_octree_t;
+
 BAOLIBDEF bao_arena_t bao_arena_create(void);
 BAOLIBDEF void *      bao_arena_alloc(bao_arena_t arena, size_t size);
 BAOLIBDEF void *      bao_arean_calloc(bao_arena_t arena, size_t nmemb, size_t size);
@@ -160,8 +178,17 @@ BAOLIBDEF bao_arena_t bao_arena_create(void)
 	if (!arena) {
 		return NULL;
 	}
-	arena->prev = NULL;
-	arena->limit = arena->avail = NULL;
+
+	arena->bao_arena_freechunks = NULL;
+	arena->bao_arena_nfree = 0;
+	arena->first = BAO_MALLOC(sizeof(*arena->first));
+	if (!arena->first) {
+		BAO_FREE(arena);
+		return NULL;
+	}
+	
+	arena->first->prev = NULL;
+	arena->first->limit = arena->first->avail = NULL;
 	return arena;
 }
 
@@ -171,28 +198,29 @@ BAOLIBDEF void *bao_arena_alloc(bao_arena_t arena, size_t size)
 	assert(size > 0);
 	size = ((size + sizeof(union bao_align_t) - 1) /
 		(sizeof(union bao_align_t))) * (sizeof(union bao_align_t));
-	while (size > arena->limit - arena->avail) {
+	bao_arena_chunk_t first = arena->first;
+	while (size > first->limit - first->avail) {
 		char *limit;
-		bao_arena_t new_arena;
-		if ((new_arena = bao_arena_freechunks) != NULL) {
-			bao_arena_freechunks = bao_arena_freechunks->prev;
-			bao_arena_nfree--;
-			limit = new_arena->limit;
+		bao_arena_chunk_t new_arena_chunk;
+		if ((new_arena_chunk = arena->bao_arena_freechunks) != NULL) {
+			arena->bao_arena_freechunks = arena->bao_arena_freechunks->prev;
+			arena->bao_arena_nfree--;
+			first->limit = new_arena_chunk->limit;
 		} else {
 			size_t m = sizeof(union bao_header_t) + size + 10*1024;
-			new_arena = BAO_MALLOC(m);
-			if (new_arena == NULL) {
+			new_arena_chunk = BAO_MALLOC(m);
+			if (new_arena_chunk == NULL) {
 				return NULL;
 			}
-			limit = (char *) new_arena + m;
+			limit = (char *) new_arena_chunk + m;
 		}
-		*new_arena = *arena;
-		arena->avail = (char *)((union bao_header_t *) new_arena + 1);
-		arena->limit = limit;
-		arena->prev  = new_arena;
+		*new_arena_chunk = *first;
+		first->avail = (char *)((union bao_header_t *) new_arena_chunk + 1);
+		first->limit = limit;
+		first->prev  = new_arena_chunk;
 	}
-	arena->avail += size;
-	return arena->avail - size;
+	first->avail += size;
+	return first->avail - size;
 }
 
 BAOLIBDEF void *bao_arean_calloc(bao_arena_t arena, size_t nmemb, size_t size)
@@ -216,31 +244,34 @@ BAOLIBDEF void *bao_arean_calloc(bao_arena_t arena, size_t nmemb, size_t size)
 BAOLIBDEF void bao_arena_free(bao_arena_t arena)
 {
 	assert(arena);
-	while (arena->prev) {
-		struct bao_arena_t tmp = *arena->prev;
-		if (bao_arena_nfree < BAO_ARENA_THRESHOLD) {
-			arena->prev->prev = bao_arena_freechunks;
-			bao_arena_freechunks = arena->prev;
-			bao_arena_nfree++;
-			bao_arena_freechunks->limit = arena->limit;
+	bao_arena_chunk_t first = arena->first;
+	while (first->prev) {
+		struct bao_arena_chunk_t tmp = *first->prev;
+		if (arena->bao_arena_nfree < BAO_ARENA_THRESHOLD) {
+			first->prev->prev = arena->bao_arena_freechunks;
+			arena->bao_arena_freechunks = first->prev;
+			arena->bao_arena_nfree++;
+			arena->bao_arena_freechunks->limit = first->limit;
 		} else {
-			BAO_FREE(arena->prev);
+			BAO_FREE(first->prev);
 		}
-		*arena = tmp;
+		*first = tmp;
 	}
 
-	assert(arena->limit == NULL);
-	assert(arena->avail == NULL);
+	assert(first->limit == NULL);
+	assert(first->avail == NULL);
 }
 
 BAOLIBDEF void bao_arena_release(bao_arena_t *arena)
 {
 	assert(arena && *arena);
-	while ((*arena)->prev) {
-		struct bao_arena_t tmp = *(*arena)->prev;
-		BAO_FREE((*arena)->prev);
-		*(*arena) = tmp;
+	bao_arena_chunk_t first = (*arena)->first;
+	while (first->prev) {
+		bao_arena_chunk_t tmp = first->prev;
+		BAO_FREE(first);
+		first = tmp;
 	}
+	BAO_FREE(first);
 	BAO_FREE(*arena);
 }
 
