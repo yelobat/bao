@@ -152,7 +152,9 @@ BAOLIBDEF bao_set_t bao_set_create(size_t hint,
 				   int (*compare)(const void *, const void *),
 				   size_t (*hash)(const void *));
 BAOLIBDEF int       bao_set_insert(bao_set_t set, void *member, void **prev);
-BAOLIBDEF int       bao_set_inside(bao_set_t set, void *member);
+BAOLIBDEF void *    bao_set_inside(bao_set_t set, void *member);
+BAOLIBDEF void      bao_set_apply(bao_set_t set, void (*apply)(const void *, void *),
+				  void *arg);
 BAOLIBDEF bao_set_t bao_set_copy(bao_set_t set, size_t size);
 BAOLIBDEF bao_set_t bao_set_union(bao_set_t set_a, bao_set_t set_b);
 BAOLIBDEF void      bao_set_free(bao_set_t *set);
@@ -595,7 +597,7 @@ BAOLIBDEF int bao_set_insert(bao_set_t set, void *member, void **prev)
 	return 0;
 }
 
-BAOLIBDEF int bao_set_inside(bao_set_t set, void *member)
+BAOLIBDEF void *bao_set_inside(bao_set_t set, void *member)
 {
 	size_t i;
 	struct bao_member_t *p;
@@ -607,7 +609,22 @@ BAOLIBDEF int bao_set_inside(bao_set_t set, void *member)
 	for (p = set->buckets[i]; p; p = p->next)
 		if (set->compare(member, p->member) == 0)
 			break;
-	return p != NULL;
+	return p ? p->member : NULL;
+}
+
+BAOLIBDEF void bao_set_apply(bao_set_t set, void (*apply)(const void *, void *),
+			     void *arg)
+{
+	size_t i;
+	struct bao_member_t *p;
+	assert(set);
+	assert(apply);
+
+	for (i = 0; i < set->size; i++) {
+		for (p = set->buckets[i]; p; p = p->next) {
+			apply(p->member, arg);
+		}
+	}
 }
 
 BAOLIBDEF bao_set_t bao_set_copy(bao_set_t set, size_t size)
