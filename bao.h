@@ -25,7 +25,7 @@
 	|| !defined(BAO_CALLOC) || !defined(BAO_FREE) || !defined(BAO_STRDUP)
 #define BAO_MALLOC(sz) malloc(sz)
 #define BAO_REALLOC(x, newsz) realloc(x, newsz)
-#define BAO_CALLOC(nmemb, size) calloc(nmembb, size)
+#define BAO_CALLOC(nmemb, size) calloc(nmemb, size)
 #define BAO_STRDUP(s) strdup(s)
 #define BAO_FREE(x) ((void) (free(x), x = NULL))
 #endif
@@ -107,17 +107,6 @@ struct bao_set_t {
 };
 
 typedef struct bao_set_t *bao_set_t;
-
-#define BAO_OCTREE_LAYER_CAPACITY (1024)
-
-struct bao_octree_t {
-	aabb_t aabb;
-	size_t size;
-	void *objects[BAO_OCTREE_LAYER_CAPACITY];
-	struct bao_octree_t *children[BAO_OCTREE_LAYER_CAPACITY];
-};
-
-typedef struct bao_octree_t *bao_octree_t;
 
 BAOLIBDEF bao_arena_t bao_arena_create(void);
 BAOLIBDEF void *      bao_arena_alloc(bao_arena_t arena, size_t size);
@@ -384,7 +373,6 @@ BAOLIBDEF bao_list_t bao_list_create(void *v)
 BAOLIBDEF bao_list_t bao_list_push(bao_list_t list, void *v)
 {
 	bao_list_t rest;
-	assert(list);
 	assert(v);
 
 	rest = bao_list_create(v);
