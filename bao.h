@@ -11,8 +11,6 @@
 #include <string.h>
 #include <limits.h>
 
-#include "linear.h"
-
 #ifndef BAOLIBDEF
 #ifdef BAOLIBSTATIC
 #define BAOLIBDEF static
@@ -196,7 +194,7 @@ BAOLIBDEF void *bao_arena_alloc(bao_arena_t arena, size_t size)
 		if ((new_arena_chunk = arena->bao_arena_freechunks) != NULL) {
 			arena->bao_arena_freechunks = arena->bao_arena_freechunks->prev;
 			arena->bao_arena_nfree--;
-			first->limit = new_arena_chunk->limit;
+			limit = new_arena_chunk->limit;
 		} else {
 			size_t m = sizeof(union bao_header_t) + size + 10*1024;
 			new_arena_chunk = BAO_MALLOC(m);
