@@ -274,9 +274,9 @@ BAOLIBDEF bao_array_t bao_array_create(size_t size, size_t memb_size)
 		return NULL;
 	}
 
-	array->size = size;
+	array->size = 0;
 	array->memb_size = memb_size;
-	array->capacity = bao_npo2(array->size);
+	array->capacity = bao_npo2(size);
 
 	array->data = BAO_MALLOC(array->memb_size * array->capacity);
 	if (!array->data) {
