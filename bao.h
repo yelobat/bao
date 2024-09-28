@@ -19,6 +19,20 @@
 #endif /* BAOLIBSTATIC */
 #endif /* BAOLIBDEF */
 
+#if !defined(BAO_LOG_MESSAGE) && !defined(BAO_POP_MESSAGE)
+#include <stdarg.h>
+#include <stdio.h>
+#define BAO_LOG
+#define BAO_LOG_STACK_CAPACITY (20)
+#define BAO_LOG_MESSAGE_CAPACITY (256)
+#define BAO_LOG_MESSAGE(fmt, ...)					\
+	bao_log_message("Error in file '%s' at %s on line %d: " fmt,	\
+			__FILE__, __func__, __LINE__ __VA_OPT__(,) __VA_ARGS__)
+
+#define BAO_POP_MESSAGE()			\
+	bao_log_pop_message()
+#endif 
+
 #if !defined(BAO_MALLOC) || !defined(BAO_REALLOC)			\
 	|| !defined(BAO_CALLOC) || !defined(BAO_FREE) || !defined(BAO_STRDUP)
 #define BAO_MALLOC(sz) malloc(sz)
@@ -106,6 +120,9 @@ struct bao_set_t {
 
 typedef struct bao_set_t *bao_set_t;
 
+BAOLIBDEF void bao_log_message(const char *fmt, ...);
+BAOLIBDEF const char *bao_log_pop_message(void);
+
 BAOLIBDEF bao_arena_t bao_arena_create(void);
 BAOLIBDEF void *      bao_arena_alloc(bao_arena_t arena, size_t size);
 BAOLIBDEF void *      bao_arean_calloc(bao_arena_t arena, size_t nmemb, size_t size);
@@ -161,10 +178,62 @@ static size_t bao_npo2(size_t n)
 	return n;
 }
 
+#ifdef BAO_LOG
+static char bao_log_stack[BAO_LOG_STACK_CAPACITY][BAO_LOG_MESSAGE_CAPACITY];
+static int bao_log_stack_ptr;
+static int bao_log_stack_size;
+
+static int bao_log_empty(void)
+{
+	return bao_log_stack_size == 0;
+}
+
+static int bao_log_full(void)
+{
+	return bao_log_stack_size == BAO_LOG_STACK_CAPACITY;
+}
+#endif /* BAO_LOG */
+
+BAOLIBDEF void bao_log_message(const char *fmt, ...)
+{
+#ifdef BAO_LOG
+	va_list args;
+	if (!bao_log_full()) {
+		bao_log_stack_size++;
+	}
+
+	va_start(args, fmt);
+	vsnprintf((char *) (bao_log_stack + bao_log_stack_ptr),
+		  BAO_LOG_MESSAGE_CAPACITY - 1, fmt, args);
+	va_end(args);
+	bao_log_stack_ptr = (bao_log_stack_ptr + 1) % BAO_LOG_STACK_CAPACITY;
+#else /* !defined(BAO_LOG) */
+	(void) 0;
+#endif /* BAO_LOG */
+}
+
+BAOLIBDEF const char *bao_log_pop_message(void)
+{
+#ifdef BAO_LOG
+	if (!bao_log_empty()) {
+		bao_log_stack_size--;
+		bao_log_stack_ptr--;
+		if (bao_log_stack_ptr < 0) {
+			bao_log_stack_ptr += BAO_LOG_STACK_CAPACITY;
+		}
+		return (const char *) bao_log_stack[bao_log_stack_ptr];
+	}
+	return NULL;
+#else /* !defined(BAO_LOG) */
+	return "Debugging disabled!";
+#endif /* BAO_LOG */
+}
+
 BAOLIBDEF bao_arena_t bao_arena_create(void)
 {
 	bao_arena_t arena = BAO_MALLOC(sizeof(*arena));
 	if (!arena) {
+		BAO_LOG_MESSAGE("Ran out of memory!");
 		return NULL;
 	}
 
@@ -172,6 +241,7 @@ BAOLIBDEF bao_arena_t bao_arena_create(void)
 	arena->bao_arena_nfree = 0;
 	arena->first = BAO_MALLOC(sizeof(*arena->first));
 	if (!arena->first) {
+		BAO_LOG_MESSAGE("Ran out of memory!");
 		BAO_FREE(arena);
 		return NULL;
 	}
@@ -199,6 +269,7 @@ BAOLIBDEF void *bao_arena_alloc(bao_arena_t arena, size_t size)
 			size_t m = sizeof(union bao_header_t) + size + 10*1024;
 			new_arena_chunk = BAO_MALLOC(m);
 			if (new_arena_chunk == NULL) {
+				BAO_LOG_MESSAGE("Ran out of memory!");
 				return NULL;
 			}
 			limit = (char *) new_arena_chunk + m;
@@ -271,6 +342,7 @@ BAOLIBDEF bao_array_t bao_array_create(size_t size, size_t memb_size)
 
 	array = BAO_MALLOC(sizeof(*array));
 	if (!array) {
+		BAO_LOG_MESSAGE("Ran out of memory!");
 		return NULL;
 	}
 
@@ -280,6 +352,7 @@ BAOLIBDEF bao_array_t bao_array_create(size_t size, size_t memb_size)
 
 	array->data = BAO_MALLOC(array->memb_size * array->capacity);
 	if (!array->data) {
+		BAO_LOG_MESSAGE("Ran out of memory!");
 		BAO_FREE(array);
 		return NULL;
 	}
@@ -295,6 +368,7 @@ static int bao_array_resize(bao_array_t array)
 	new_capacity = array->capacity << 1;
 	new_data = BAO_REALLOC(array->data, new_capacity * array->memb_size);
 	if (!new_data) {
+		BAO_LOG_MESSAGE("Ran out of memory!");
 		return -ENOMEM;
 	}
 
@@ -360,6 +434,7 @@ BAOLIBDEF bao_list_t bao_list_create(void *v)
 	
 	list = BAO_MALLOC(sizeof(*list));
 	if (!list) {
+		BAO_LOG_MESSAGE("Ran out of memory!");
 		return NULL;
 	}
 
@@ -375,6 +450,7 @@ BAOLIBDEF bao_list_t bao_list_push(bao_list_t list, void *v)
 
 	rest = bao_list_create(v);
 	if (!rest) {
+		BAO_LOG_MESSAGE("Ran out of memory!");
 		return list;
 	}
 
@@ -408,8 +484,9 @@ BAOLIBDEF bao_list_t bao_list_append(bao_list_t a_list, bao_list_t b_list)
 {
 	bao_list_t *head = &a_list;
 
-	while (*head)
+	while (*head) {
 		head = &(*head)->rest;
+	}
 	*head = b_list;
 	return a_list;
 }
@@ -443,6 +520,7 @@ BAOLIBDEF bao_map_t bao_map_create(size_t hint,
 		;
 	map = BAO_MALLOC(sizeof(*map) + primes[i-1] * sizeof(map->buckets[0]));
 	if (!map) {
+		BAO_LOG_MESSAGE("Ran out of memory!");
 		return NULL;
 	}
 	
@@ -474,6 +552,7 @@ BAOLIBDEF int bao_map_insert(bao_map_t map, void *key, void *v, void **prev)
 	if (p == NULL) {
 		p = BAO_MALLOC(sizeof(*p));
 		if (!p) {
+			BAO_LOG_MESSAGE("Ran out of memory!");
 			return -ENOMEM;
 		}
 		p->key = key;
@@ -540,6 +619,7 @@ BAOLIBDEF bao_set_t bao_set_create(size_t hint,
 		;
 	set = BAO_MALLOC(sizeof(*set) + primes[i-1] * sizeof(set->buckets[0]));
 	if (!set) {
+		BAO_LOG_MESSAGE("Ran out of memory!");
 		return NULL;
 	}
 
@@ -568,6 +648,7 @@ BAOLIBDEF int bao_set_insert(bao_set_t set, void *member, void **prev)
 	if (p == NULL) {
 		p = BAO_MALLOC(sizeof(*p));
 		if (!p) {
+			BAO_LOG_MESSAGE("Ran out of memory!");
 			return -ENOMEM;
 		}
 		p->member = member;
@@ -623,6 +704,7 @@ BAOLIBDEF bao_set_t bao_set_copy(bao_set_t set, size_t size)
 	assert(set);
 	new_set = bao_set_create(size, set->compare, set->hash);
 	if (!new_set) {
+		BAO_LOG_MESSAGE("Ran out of memory!");
 		return NULL;
 	}
 
@@ -632,6 +714,7 @@ BAOLIBDEF bao_set_t bao_set_copy(bao_set_t set, size_t size)
 			j = set->hash(member) % new_set->size;
 			q = BAO_MALLOC(sizeof(*q));
 			if (!q) {
+				BAO_LOG_MESSAGE("Ran out of memory!");
 				bao_set_free(&new_set);
 				return NULL;
 			}
