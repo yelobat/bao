@@ -149,6 +149,8 @@ BAOLIBDEF bao_map_t bao_map_create(size_t hint,
 BAOLIBDEF int       bao_map_insert(bao_map_t map, void *key, void *v,
 				   void **prev);
 BAOLIBDEF void *    bao_map_find(bao_map_t map, void *key);
+BAOLIBDEF void      bao_map_apply(bao_map_t map, void (*apply)(void *, void *, void *),
+				  void *arg);
 BAOLIBDEF size_t    bao_map_length(bao_map_t map);
 BAOLIBDEF void      bao_map_free(bao_map_t *map);
 
@@ -157,7 +159,7 @@ BAOLIBDEF bao_set_t bao_set_create(size_t hint,
 				   size_t (*hash)(const void *));
 BAOLIBDEF int       bao_set_insert(bao_set_t set, void *member, void **prev);
 BAOLIBDEF void *    bao_set_inside(bao_set_t set, void *member);
-BAOLIBDEF void      bao_set_apply(bao_set_t set, void (*apply)(const void *, void *),
+BAOLIBDEF void      bao_set_apply(bao_set_t set, void (*apply)(void *, void *),
 				  void *arg);
 BAOLIBDEF bao_set_t bao_set_copy(bao_set_t set, size_t size);
 BAOLIBDEF bao_set_t bao_set_union(bao_set_t set_a, bao_set_t set_b);
@@ -581,6 +583,21 @@ BAOLIBDEF void *bao_map_find(bao_map_t map, void *key)
 	return p ? p->value : NULL;
 }
 
+BAOLIBDEF void bao_map_apply(bao_map_t map, void (*apply)(void *, void *, void *),
+			     void *arg)
+{
+	size_t i;
+	struct bao_mapping_t *p;
+	assert(map);
+	assert(apply);
+
+	for (i = 0; i < map->size; i++) {
+		for (p = map->buckets[i]; p; p = p->next) {
+			apply(p->key, p->value, arg);
+		}
+	}
+}
+
 BAOLIBDEF size_t bao_map_length(bao_map_t map)
 {
 	assert(map);
@@ -679,7 +696,7 @@ BAOLIBDEF void *bao_set_inside(bao_set_t set, void *member)
 	return p ? p->member : NULL;
 }
 
-BAOLIBDEF void bao_set_apply(bao_set_t set, void (*apply)(const void *, void *),
+BAOLIBDEF void bao_set_apply(bao_set_t set, void (*apply)(void *, void *),
 			     void *arg)
 {
 	size_t i;
