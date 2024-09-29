@@ -125,7 +125,7 @@ BAOLIBDEF const char *bao_log_pop_message(void);
 
 BAOLIBDEF bao_arena_t bao_arena_create(void);
 BAOLIBDEF void *      bao_arena_alloc(bao_arena_t arena, size_t size);
-BAOLIBDEF void *      bao_arean_calloc(bao_arena_t arena, size_t nmemb, size_t size);
+BAOLIBDEF void *      bao_arena_calloc(bao_arena_t arena, size_t nmemb, size_t size);
 BAOLIBDEF void        bao_arena_free(bao_arena_t arena);
 BAOLIBDEF void        bao_arena_release(bao_arena_t *arena);
 
@@ -285,7 +285,7 @@ BAOLIBDEF void *bao_arena_alloc(bao_arena_t arena, size_t size)
 	return first->avail - size;
 }
 
-BAOLIBDEF void *bao_arean_calloc(bao_arena_t arena, size_t nmemb, size_t size)
+BAOLIBDEF void *bao_arena_calloc(bao_arena_t arena, size_t nmemb, size_t size)
 {
 	void *ptr;
 
