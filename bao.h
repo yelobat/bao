@@ -225,7 +225,7 @@ BAOLIBDEF const char *bao_log_pop_message(void)
 		}
 		return (const char *) bao_log_stack[bao_log_stack_ptr];
 	}
-	return NULL;
+	return "No Errors";
 #else /* !defined(BAO_LOG) */
 	return "Debugging disabled!";
 #endif /* BAO_LOG */
