@@ -132,6 +132,7 @@ BAOLIBDEF void        bao_arena_release(bao_arena_t *arena);
 BAOLIBDEF bao_array_t bao_array_create(size_t size, size_t memb_size);
 BAOLIBDEF int         bao_array_insert(bao_array_t array, void *v);
 BAOLIBDEF void *      bao_array_get(bao_array_t array, size_t i);
+BAOLIBDEF void        bao_array_clear(bao_array_t array);
 BAOLIBDEF void *      bao_array_find(bao_array_t array, void *v,
 				     int (*compare)(void *, void *));
 BAOLIBDEF void        bao_array_free(bao_array_t *array);
@@ -148,6 +149,8 @@ BAOLIBDEF bao_map_t bao_map_create(size_t hint,
 				   size_t hash(const void *));
 BAOLIBDEF int       bao_map_insert(bao_map_t map, void *key, void *v,
 				   void **prev);
+BAOLIBDEF int       bao_map_remove(bao_map_t map, const void *key,
+				   void **fkey, void **fv);
 BAOLIBDEF void *    bao_map_find(bao_map_t map, void *key);
 BAOLIBDEF void      bao_map_apply(bao_map_t map, void (*apply)(void *, void *, void *),
 				  void *arg);
@@ -404,6 +407,13 @@ BAOLIBDEF void *bao_array_get(bao_array_t array, size_t i)
 	return ((char *) array->data) + i * array->memb_size;
 }
 
+BAOLIBDEF void bao_array_clear(bao_array_t array)
+{
+	assert(array);
+	array->size = 0;
+	memset(array->data, 0, array->capacity * array->memb_size);
+}
+
 BAOLIBDEF void *bao_array_find(bao_array_t array, void *v,
 			       int (*compare)(void *, void *))
 {
@@ -568,6 +578,37 @@ BAOLIBDEF int bao_map_insert(bao_map_t map, void *key, void *v, void **prev)
 
 	p->value = v;
 	return 0;
+}
+
+BAOLIBDEF int bao_map_remove(bao_map_t map, const void *key,
+			     void **fkey, void **fv)
+{
+	size_t i;
+	struct bao_mapping_t **pp;
+
+	assert(map);
+	assert(key);
+	i = map->hash(key) % map->size;
+	for (pp = &map->buckets[i]; *pp; pp = &(*pp)->next) {
+		if (map->compare(key, (*pp)->key) == 0) {
+			struct bao_mapping_t *p = *pp;
+			void *value = p->value;
+			void *key = p->key;
+			*pp = p->next;
+			BAO_FREE(p);
+			map->length--;
+			if (fkey) {
+				*fkey = key;
+			}
+			
+			if (fv) {
+				*fv = value;
+			}
+			return 0;
+		}
+	}
+
+	return -1;
 }
 
 BAOLIBDEF void *bao_map_find(bao_map_t map, void *key)
