@@ -130,6 +130,7 @@ BAOLIBDEF void        bao_arena_free(bao_arena_t arena);
 BAOLIBDEF void        bao_arena_release(bao_arena_t *arena);
 
 BAOLIBDEF bao_array_t bao_array_create(size_t size, size_t memb_size);
+BAOLIBDEF size_t      bao_array_size(bao_array_t array);
 BAOLIBDEF int         bao_array_insert(bao_array_t array, void *v);
 BAOLIBDEF void *      bao_array_get(bao_array_t array, size_t i);
 BAOLIBDEF void        bao_array_clear(bao_array_t array);
@@ -363,6 +364,12 @@ BAOLIBDEF bao_array_t bao_array_create(size_t size, size_t memb_size)
         }
 
         return array;
+}
+
+BAOLIBDEF size_t bao_array_size(bao_array_t array)
+{
+        assert(array);
+        return array->size;
 }
 
 static int bao_array_resize(bao_array_t array)
