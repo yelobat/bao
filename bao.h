@@ -19,6 +19,8 @@
 #endif /* BAOLIBSTATIC */
 #endif /* BAOLIBDEF */
 
+#include "linear.h"
+
 #if !defined(BAO_LOG_MESSAGE) && !defined(BAO_POP_MESSAGE)
 #include <stdarg.h>
 #include <stdio.h>
@@ -120,6 +122,23 @@ struct bao_set_t {
 
 typedef struct bao_set_t *bao_set_t;
 
+struct bao_bvhnode_t {
+        aabb_t bbox;
+        size_t left, right;
+        size_t first, total;
+};
+
+struct bao_bvh_t {
+        bao_array_t array;
+        size_t size;
+        size_t capacity;
+        bao_bvhnode_t *nodes;
+};
+
+#define BAO_BVH_HINT (2*64 - 1)
+
+typedef struct bao_bvhnode_t *bao_bvhnode_t;
+
 BAOLIBDEF void bao_log_message(const char *fmt, ...);
 BAOLIBDEF const char *bao_log_pop_message(void);
 
@@ -131,7 +150,13 @@ BAOLIBDEF void        bao_arena_release(bao_arena_t *arena);
 
 BAOLIBDEF bao_array_t bao_array_create(size_t size, size_t memb_size);
 BAOLIBDEF size_t      bao_array_size(bao_array_t array);
+BAOLIBDEF size_t      bao_array_capacity(bao_array_t array);
+BAOLIBDEF int         bao_array_empty(bao_array_t array);
 BAOLIBDEF int         bao_array_insert(bao_array_t array, void *v);
+BAOLIBDEF int         bao_array_insert2(bao_array_t array, void *vs, const size_t count);
+BAOLIBDEF int         bao_array_insert_at(bao_array_t array, void *v, size_t index);
+BAOLIBDEF void        bao_array_apply(bao_array_t array, void (*apply)(void *));
+BAOLIBDEF void *      bao_array_pop(bao_array_t array);
 BAOLIBDEF void *      bao_array_get(bao_array_t array, size_t i);
 BAOLIBDEF void        bao_array_clear(bao_array_t array);
 BAOLIBDEF void *      bao_array_find(bao_array_t array, void *v,
@@ -168,6 +193,10 @@ BAOLIBDEF void      bao_set_apply(bao_set_t set, void (*apply)(void *, void *),
 BAOLIBDEF bao_set_t bao_set_copy(bao_set_t set, size_t size);
 BAOLIBDEF bao_set_t bao_set_union(bao_set_t set_a, bao_set_t set_b);
 BAOLIBDEF void      bao_set_free(bao_set_t *set);
+
+BAOLIBDEF bao_bvh_t bao_bvh_create(void);
+BAOLIBDEF int       bao_bvh_insert(bao_bvh_t bvh, aabb_t aabb);
+BAOLIBDEF void      bao_bvh_free(bao_bvh_t *bvh);
 
 #ifdef BAO_IMPLEMENTATION
 
@@ -363,6 +392,7 @@ BAOLIBDEF bao_array_t bao_array_create(size_t size, size_t memb_size)
                 return NULL;
         }
 
+        memset(array->data, 0, array->capacity * array->memb_size);
         return array;
 }
 
@@ -370,6 +400,18 @@ BAOLIBDEF size_t bao_array_size(bao_array_t array)
 {
         assert(array);
         return array->size;
+}
+
+BAOLIBDEF size_t bao_array_capacity(bao_array_t array)
+{
+        assert(array);
+        return array->capacity;
+}
+
+BAOLIBDEF int bao_array_empty(bao_array_t array)
+{
+        assert(array);
+        return array->size == 0;
 }
 
 static int bao_array_resize(bao_array_t array)
@@ -384,8 +426,10 @@ static int bao_array_resize(bao_array_t array)
                 return -ENOMEM;
         }
 
-        array->capacity = new_capacity;
         array->data = new_data;
+        memset(((char *) array->data) + array->memb_size * array->capacity,
+               0, array->memb_size * (new_capacity - array->capacity));
+        array->capacity = new_capacity;
         return 0;
 }
 
@@ -407,10 +451,66 @@ BAOLIBDEF int bao_array_insert(bao_array_t array, void *v)
         return 0;
 }
 
+BAOLIBDEF int bao_array_insert2(bao_array_t array, void *vs, const size_t count)
+{
+        int ret;
+        assert(array);
+        assert(vs);
+        assert(count > 0);
+
+        while (array->size + count >= array->capacity) {
+                if ((ret = bao_array_resize(array)) != 0) {
+                        return ret;
+                }
+        }
+
+        memcpy(((char *) array->data) + array->memb_size * array->size,
+               vs, array->memb_size * count);
+        array->size += count;
+        return 0;
+}
+
+BAOLIBDEF int bao_array_insert_at(bao_array_t array, void *v, size_t index)
+{
+        assert(array);
+        assert(v);
+        assert(index >= 0 && index < bao_array_size(array));
+
+        memcpy(((char *) array->data) + array->memb_size * index,
+               v, array->memb_size);
+        return 0;
+}
+
+BAOLIBDEF void bao_array_apply(bao_array_t array, void (*apply)(void *))
+{
+        size_t i;
+        void *elem;
+        assert(array);
+        assert(apply);
+
+        for (i = 0; i < array->size; i++) {
+                elem = ((char *) array->data) + i * array->memb_size;
+                apply(elem);
+        }
+}
+
+BAOLIBDEF void *bao_array_pop(bao_array_t array)
+{
+        assert(array);
+        void *v;
+        if (bao_array_empty(array)) {
+                return NULL;
+        }
+
+        v = bao_array_get(array, array->size-1);
+        array->size--;
+        return v;
+}
+
 BAOLIBDEF void *bao_array_get(bao_array_t array, size_t i)
 {
         assert(array);
-        assert(i >= 0 && i < array->size);
+        assert(i >= 0 && i < bao_array_capacity(array));
         return ((char *) array->data) + i * array->memb_size;
 }
 
@@ -836,6 +936,56 @@ BAOLIBDEF void bao_set_free(bao_set_t *set)
         }
 
         BAO_FREE(*set);
+}
+
+static void bao_bvh_update_bounds(bao_bvh_t bvh, size_t index)
+{
+        assert(bvh);
+        bao_bvhnode_t node;
+        size_t first, i;
+        node = bvh[index];
+        node->aabb = ll_aabb_create3f(INFINITY, INFINITY, INFINITY,
+                                      INFINITY, INFINITY, INFINITY);
+        for (first = node->first, i = 0; i < node->total; i++) {
+                aabb_t bbox = 
+        }
+}
+
+static void bao_bvh_subdivide(bao_bvh_t bvh, size_t index)
+{
+
+}
+
+BAOLIBDEF bao_bvh_t bao_bvh_create(void)
+{
+        char *p;
+        bao_bvh_t bvh;
+        bao_bvhnode_t root;
+        size_t root_index = 0, used_index = 1;
+        bvh = BULB_MALLOC(sizeof(*bvh) * BAO_BVH_HINT);
+        if (!bvh) {
+                BULB_LOG_MESSAGE("Ran out of memory!");
+                return NULL;
+        }
+
+        root = bvh[root_index];
+        root->left = root->right = 0;
+        root->first = 0, root->total = BAO_BVH_HINT >> 1;
+        bao_bvh_update_bounds(bvh, root_index);
+        bao_bvh_subdivide(bvh, root_index);
+        return bvh;
+}
+
+BAOLIBDEF int bao_bvh_insert(bao_bvh_t bvh, aabb_t aabb)
+{
+        assert(bvh);
+
+}
+
+BAOLIBDEF void bao_bvh_free(bao_bvh_t *bvh)
+{
+        assert(bvh);
+        assert(*bvh);
 }
 
 #endif /* BAO_IMPLEMENTATION */
